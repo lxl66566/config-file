@@ -17,7 +17,7 @@
 //! # Examples
 //!
 //! ```rust,no_run
-//! use config_file::FromConfigFile;
+//! use config_file::{FromConfigFile, ToConfigFile};
 //! use serde::{Serialize, Deserialize};
 //!
 //! #[derive(Serialize, Deserialize)]
@@ -29,9 +29,11 @@
 //! let config = Config::from_config_file("/etc/myconfig.toml").unwrap();
 //!
 //! // write
-//! Config { host: "example.com" }.to_config_file("/tmp/myconfig.toml").unwrap();
+//! Config { host: "example.com".into() }.to_config_file("/tmp/myconfig.toml").unwrap();
 //! ```
 
+#[cfg(feature = "xml")]
+use std::io::BufReader;
 use std::{
     ffi::OsStr,
     fs::{File, OpenOptions},
@@ -76,9 +78,9 @@ impl<C: DeserializeOwned> FromConfigFile for C {
             )
             .map_err(TomlError::DeserializationError)?),
             #[cfg(feature = "xml")]
-            Some("xml") => {
-                serde_xml_rs::from_reader(open_file(path)?).map_err(ConfigFileError::Xml)
-            }
+            Some("xml") => Ok(quick_xml::de::from_reader(BufReader::new(open_file(
+                path,
+            )?))?),
             #[cfg(feature = "yaml")]
             Some("yaml") | Some("yml") => {
                 serde_yaml::from_reader(open_file(path)?).map_err(ConfigFileError::Yaml)
@@ -90,14 +92,14 @@ impl<C: DeserializeOwned> FromConfigFile for C {
 
 /// Trait for storing a struct into a configuration file.
 /// This trait is automatically implemented when [`serde::Serialize`] is.
-pub trait IntoConfigFile {
+pub trait ToConfigFile {
     /// Load ourselves from the configuration file located at @path
     fn to_config_file(self, path: impl AsRef<Path>) -> Result<(), ConfigFileError>
     where
         Self: Sized;
 }
 
-impl<C: Serialize> IntoConfigFile for C {
+impl<C: Serialize> ToConfigFile for C {
     fn to_config_file(self, path: impl AsRef<Path>) -> Result<(), ConfigFileError>
     where
         Self: Sized,
@@ -121,9 +123,7 @@ impl<C: Serialize> IntoConfigFile for C {
                 Ok(())
             }
             #[cfg(feature = "xml")]
-            Some("xml") => {
-                serde_xml_rs::to_writer(open_write_file(path)?, &self).map_err(ConfigFileError::Xml)
-            }
+            Some("xml") => Ok(std::fs::write(path, quick_xml::se::to_string(&self)?)?),
             #[cfg(feature = "yaml")]
             Some("yaml") | Some("yml") => {
                 serde_yaml::to_writer(open_write_file(path)?, &self).map_err(ConfigFileError::Yaml)
@@ -171,7 +171,7 @@ pub enum ConfigFileError {
     #[cfg(feature = "xml")]
     #[error("couldn't parse XML file")]
     /// There was an error while parsing the XML data
-    Xml(#[from] serde_xml_rs::Error),
+    Xml(#[from] quick_xml::DeError),
     #[cfg(feature = "yaml")]
     #[error("couldn't parse YAML file")]
     /// There was an error while parsing the YAML data

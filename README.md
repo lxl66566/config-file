@@ -17,7 +17,7 @@ config-file reads and writes your configuration files and parse them automatical
 ## Examples
 
 ```rust
-use config_file::FromConfigFile;
+use config_file::{FromConfigFile, ToConfigFile};
 use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize)]
@@ -29,5 +29,5 @@ struct Config {
 let config = Config::from_config_file("/etc/myconfig.toml").unwrap();
 
 // write
-Config { host: "example.com" }.to_config_file("/tmp/myconfig.toml").unwrap();
+Config { host: "example.com".into() }.to_config_file("/tmp/myconfig.toml").unwrap();
 ```
