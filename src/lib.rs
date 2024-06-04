@@ -46,6 +46,38 @@ use thiserror::Error;
 #[cfg(feature = "toml")]
 use toml_crate as toml;
 
+/// Type of configuration file.
+#[allow(missing_docs)]
+#[derive(Debug, Clone, Copy)]
+pub enum ConfigType {
+    Json,
+    Toml,
+    Xml,
+    Yaml,
+}
+
+impl ConfigType {
+    /// Get the [`ConfigType`] from a file extension
+    pub fn from_extension(extension: &str) -> Option<Self> {
+        match extension.to_lowercase().as_str() {
+            #[cfg(feature = "json")]
+            "json" => Some(Self::Json),
+            #[cfg(feature = "toml")]
+            "toml" => Some(Self::Toml),
+            #[cfg(feature = "xml")]
+            "xml" => Some(Self::Xml),
+            #[cfg(feature = "yaml")]
+            "yaml" | "yml" => Some(Self::Yaml),
+            _ => None,
+        }
+    }
+
+    /// Get the [`ConfigType`] from a path
+    pub fn from_path(path: &Path) -> Option<Self> {
+        Self::from_extension(path.extension().and_then(OsStr::to_str)?)
+    }
+}
+
 /// Trait for loading a struct from a configuration file.
 /// This trait is automatically implemented when [`serde::Deserialize`] is.
 pub trait FromConfigFile {
@@ -61,30 +93,28 @@ impl<C: DeserializeOwned> FromConfigFile for C {
         Self: Sized,
     {
         let path = path.as_ref();
-        let extension = path
-            .extension()
-            .and_then(OsStr::to_str)
-            .map(|extension| extension.to_lowercase());
-        match extension.as_deref() {
+        let config_type = ConfigType::from_path(path).ok_or(ConfigFileError::UnsupportedFormat)?;
+        match config_type {
             #[cfg(feature = "json")]
-            Some("json") => {
+            ConfigType::Json => {
                 serde_json::from_reader(open_file(path)?).map_err(ConfigFileError::Json)
             }
             #[cfg(feature = "toml")]
-            Some("toml") => Ok(toml::from_str(
+            ConfigType::Toml => Ok(toml::from_str(
                 std::fs::read_to_string(path)
                     .map_err(ConfigFileError::FileAccess)?
                     .as_str(),
             )
             .map_err(TomlError::DeserializationError)?),
             #[cfg(feature = "xml")]
-            Some("xml") => Ok(quick_xml::de::from_reader(BufReader::new(open_file(
+            ConfigType::Xml => Ok(quick_xml::de::from_reader(BufReader::new(open_file(
                 path,
             )?))?),
             #[cfg(feature = "yaml")]
-            Some("yaml") | Some("yml") => {
+            ConfigType::Yaml => {
                 serde_yaml::from_reader(open_file(path)?).map_err(ConfigFileError::Yaml)
             }
+            #[allow(unreachable_patterns)]
             _ => Err(ConfigFileError::UnsupportedFormat),
         }
     }
@@ -105,16 +135,13 @@ impl<C: Serialize> ToConfigFile for C {
         Self: Sized,
     {
         let path = path.as_ref();
-        let extension = path
-            .extension()
-            .and_then(OsStr::to_str)
-            .map(|extension| extension.to_lowercase());
-        match extension.as_deref() {
+        let config_type = ConfigType::from_path(path).ok_or(ConfigFileError::UnsupportedFormat)?;
+        match config_type {
             #[cfg(feature = "json")]
-            Some("json") => serde_json::to_writer_pretty(open_write_file(path)?, &self)
+            ConfigType::Json => serde_json::to_writer_pretty(open_write_file(path)?, &self)
                 .map_err(ConfigFileError::Json),
             #[cfg(feature = "toml")]
-            Some("toml") => {
+            ConfigType::Toml => {
                 open_write_file(path)?.write_all(
                     toml::to_string_pretty(&self)
                         .map_err(TomlError::SerializationError)?
@@ -123,11 +150,12 @@ impl<C: Serialize> ToConfigFile for C {
                 Ok(())
             }
             #[cfg(feature = "xml")]
-            Some("xml") => Ok(std::fs::write(path, quick_xml::se::to_string(&self)?)?),
+            ConfigType::Xml => Ok(std::fs::write(path, quick_xml::se::to_string(&self)?)?),
             #[cfg(feature = "yaml")]
-            Some("yaml") | Some("yml") => {
+            ConfigType::Yaml => {
                 serde_yaml::to_writer(open_write_file(path)?, &self).map_err(ConfigFileError::Yaml)
             }
+            #[allow(unreachable_patterns)]
             _ => Err(ConfigFileError::UnsupportedFormat),
         }
     }
