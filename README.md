@@ -1,23 +1,18 @@
 # config-file
 
-[![API Docs](https://docs.rs/config-file/badge.svg)](https://docs.rs/config-file)
-[![Downloads](https://img.shields.io/crates/d/config-file.svg)](https://crates.io/crates/config-file)
-
-## Read and write configuration file automatically
-
-config-file reads and writes your configuration files and parse them automatically using their extension.
+Extreamly easy to load and store your configuration file!
 
 ## Features
 
-- toml is enabled by default
-- json is optional
-- xml is optional
-- yaml is optional
+- `toml` (enabled by default)
+- `json`
+- `xml`
+- `yaml`
 
 ## Examples
 
-```rust
-use config_file::{FromConfigFile, ToConfigFile};
+```rust, no_run
+use config_file2::{LoadConfigFile, StoreConfigFile};
 use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize)]
@@ -25,9 +20,19 @@ struct Config {
     host: String,
 }
 
-// read
-let config = Config::from_config_file("/etc/myconfig.toml").unwrap();
+// store
+Config { host: "example.com".into() }.store("/tmp/myconfig.toml").unwrap();
 
-// write
-Config { host: "example.com".into() }.to_config_file("/tmp/myconfig.toml").unwrap();
+// load
+let config = Config::load("/tmp/myconfig.toml").unwrap();
+assert_eq!(config.host.as_str(), "example.com");
+```
+
+## more functions
+
+```rust, ignore
+fn load_with_specific_format(path: impl AsRef<Path>, config_type: ConfigFormat) -> Result<Self>;
+fn load_or_default(path: impl AsRef<Path>) -> Result<Self>;
+fn store_with_specific_format(self, path: impl AsRef<Path>, config_type: ConfigFormat) -> Result<()>;
+fn store_without_overwrite(self, path: impl AsRef<Path>) -> Result<()>;
 ```

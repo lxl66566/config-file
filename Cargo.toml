@@ -1,49 +1,32 @@
 [package]
-name = "config-file"
-version = "0.2.3"                                               # remember to update html_root_url
-authors = ["Marc-Antoine Perennou <Marc-Antoine@Perennou.com>"]
+name = "config-file2"
+version = "0.3.0"
+authors = [
+  "Marc-Antoine Perennou <Marc-Antoine@Perennou.com>",
+  "lxl66566 <lxl66566@gmail.com>",
+]
 edition = "2021"
-description = "Read and parse configuration file automatically"
-repository = "https://github.com/Keruspe/config-file"
-documentation = "https://docs.rs/config-file"
+description = "Extreamly easy to read and write configuration file"
+repository = "https://github.com/lxl66566/config-file"
+documentation = "https://docs.rs/config-file2"
 keywords = ["config", "configuration"]
 categories = ["config"]
 license = "BSD-2-Clause"
-rust-version = "1.56.0"
 
 [lib]
-name = "config_file"
+name = "config_file2"
 
 [features]
 default = ["toml"]
 json = ["serde_json"]
-toml = ["toml-crate"]
+toml = ["toml_crate"]
 xml = ["quick-xml"]
-yaml = ["serde_yaml"]
+yaml = ["serde_yml"]
 
 [dependencies]
-serde = "^1.0"
-thiserror = "^1.0"
-
-[dependencies.serde_json]
-version = "^1.0"
-optional = true
-
-[dependencies.serde_yaml]
-version = "^0.8"
-optional = true
-
-[dependencies.toml-crate]
-package = "toml"
-version = "^0.5"
-optional = true
-
-[dependencies.quick-xml]
-version = "0.31.0"
-features = ["serialize"]
-optional = true
-
-
-[dev-dependencies.serde]
-version = "^1.0"
-features = ["derive"]
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0.63"
+serde_json = { version = "1.0", optional = true }
+serde_yml = { version = "0.0.10", optional = true }
+toml_crate = { version = "0.8.15", optional = true, package = "toml" }
+quick-xml = { version = "0.36.0", features = ["serialize"], optional = true }
