@@ -1,4 +1,4 @@
-#[cfg(feature = "toml_crate")]
+#[cfg(feature = "toml")]
 use toml_crate as toml;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -20,7 +20,7 @@ pub enum Error {
     Json(#[from] serde_json::Error),
 
     /// There was an error while parsing the TOML data
-    #[cfg(feature = "toml_crate")]
+    #[cfg(feature = "toml")]
     #[error("couldn't parse TOML file")]
     Toml(#[from] TomlError),
 
@@ -40,7 +40,7 @@ pub enum Error {
 }
 
 /// Merge two TOML errors into one
-#[cfg(feature = "toml_crate")]
+#[cfg(feature = "toml")]
 #[derive(Debug, thiserror::Error)]
 pub enum TomlError {
     /// TOML deserialization error

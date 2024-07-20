@@ -14,7 +14,7 @@ use std::{
 pub use error::Result;
 use error::{Error, TomlError};
 use serde::{de::DeserializeOwned, Serialize};
-#[cfg(feature = "toml_crate")]
+#[cfg(feature = "toml")]
 use toml_crate as toml;
 
 /// Format of configuration file.
@@ -32,7 +32,7 @@ impl ConfigFormat {
         match extension.to_lowercase().as_str() {
             #[cfg(feature = "json")]
             "json" => Some(Self::Json),
-            #[cfg(feature = "toml_crate")]
+            #[cfg(feature = "toml")]
             "toml" => Some(Self::Toml),
             #[cfg(feature = "xml")]
             "xml" => Some(Self::Xml),
@@ -88,7 +88,7 @@ impl<C: DeserializeOwned> LoadConfigFile for C {
         match config_type {
             #[cfg(feature = "json")]
             ConfigFormat::Json => serde_json::from_reader(open_file(path)?).map_err(Error::Json),
-            #[cfg(feature = "toml_crate")]
+            #[cfg(feature = "toml")]
             ConfigFormat::Toml => Ok(toml::from_str(
                 std::fs::read_to_string(path)
                     .map_err(Error::FileAccess)?
@@ -150,7 +150,7 @@ impl<C: Serialize> StoreConfigFile for C {
             ConfigFormat::Json => {
                 serde_json::to_writer_pretty(open_write_file(path)?, &self).map_err(Error::Json)
             }
-            #[cfg(feature = "toml_crate")]
+            #[cfg(feature = "toml")]
             ConfigFormat::Toml => {
                 open_write_file(path)?.write_all(
                     toml::to_string_pretty(&self)
@@ -199,7 +199,7 @@ mod test {
 
     use super::*;
 
-    #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Default, Eq)]
     struct TestConfig {
         host: String,
         port: u64,
@@ -207,7 +207,7 @@ mod test {
         inner: TestConfigInner,
     }
 
-    #[derive(Debug, Serialize, Deserialize, PartialEq, Default)]
+    #[derive(Debug, Serialize, Deserialize, PartialEq, Default, Eq)]
     struct TestConfigInner {
         answer: u8,
     }
@@ -246,7 +246,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "toml_crate")]
+    #[cfg(feature = "toml")]
     fn test_file_not_found() {
         let config = TestConfig::load("/tmp/foobar.toml");
         assert!(matches!(config, Err(Error::FileAccess(_))));
@@ -260,7 +260,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "toml_crate")]
+    #[cfg(feature = "toml")]
     fn test_toml() {
         test_read_with_extension("toml");
         test_write_with_extension("toml");
@@ -281,7 +281,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "toml_crate")]
+    #[cfg(feature = "toml")]
     fn test_store_without_overwrite() {
         let temp = temp_dir().join("test_store_without_overwrite.toml");
         std::fs::File::create(&temp).unwrap();
@@ -292,7 +292,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "toml_crate")]
+    #[cfg(all(feature = "toml", feature = "yaml"))]
     fn test_store_load_with_specific_format() {
         let temp = temp_dir().join("test_store_load_with_specific_format.toml");
         std::fs::File::create(&temp).unwrap();
@@ -302,5 +302,15 @@ mod test {
         assert!(TestConfig::load(&temp).is_err());
         assert!(TestConfig::load_with_specific_format(&temp, ConfigFormat::Yaml).is_ok());
         std::fs::remove_file(temp).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "toml")]
+    fn test_load_or_default() {
+        let temp = temp_dir().join("test_load_or_default.toml");
+        assert_eq!(
+            TestConfig::load_or_default(&temp).unwrap(),
+            TestConfig::default()
+        );
     }
 }
