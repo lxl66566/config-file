@@ -113,12 +113,12 @@ pub trait StoreConfigFile {
     /// Store config file to path with specific format, do not use extension to
     /// determine.
     fn store_with_specific_format(
-        self,
+        &self,
         path: impl AsRef<Path>,
         config_type: ConfigFormat,
     ) -> Result<()>;
     /// Store config file to path
-    fn store(self, path: impl AsRef<Path>) -> Result<()>
+    fn store(&self, path: impl AsRef<Path>) -> Result<()>
     where
         Self: Sized,
     {
@@ -127,7 +127,7 @@ pub trait StoreConfigFile {
         self.store_with_specific_format(path, config_type)
     }
     /// Store config file to path, if path exists, return error
-    fn store_without_overwrite(self, path: impl AsRef<Path>) -> Result<()>
+    fn store_without_overwrite(&self, path: impl AsRef<Path>) -> Result<()>
     where
         Self: Sized,
     {
@@ -140,7 +140,7 @@ pub trait StoreConfigFile {
 
 impl<C: Serialize> StoreConfigFile for C {
     fn store_with_specific_format(
-        self,
+        &self,
         path: impl AsRef<Path>,
         config_type: ConfigFormat,
     ) -> Result<()> {
