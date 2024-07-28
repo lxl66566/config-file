@@ -1,12 +1,12 @@
 [package]
 name = "config-file2"
-version = "0.3.1"
+version = "0.3.2"
 authors = [
   "Marc-Antoine Perennou <Marc-Antoine@Perennou.com>",
   "lxl66566 <lxl66566@gmail.com>",
 ]
 edition = "2021"
-description = "Extreamly easy to read and write configuration file"
+description = "Extremely easy to read and write configuration file"
 repository = "https://github.com/lxl66566/config-file"
 documentation = "https://docs.rs/config-file2"
 keywords = ["config", "configuration"]
@@ -17,16 +17,19 @@ license = "BSD-2-Clause"
 name = "config_file2"
 
 [features]
+all = ["default", "json", "toml", "xml", "yaml", "ron"]
 default = ["toml"]
 json = ["serde_json"]
 toml = ["toml_crate"]
 xml = ["quick-xml"]
 yaml = ["serde_yml"]
+ron = ["ron_crate"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0.63"
 serde_json = { version = "1.0", optional = true }
-serde_yml = { version = "0.0.10", optional = true }
+serde_yml = { version = "0.0.11", optional = true }
 toml_crate = { version = "0.8.15", optional = true, package = "toml" }
 quick-xml = { version = "0.36.0", features = ["serialize"], optional = true }
+ron_crate = { version = "0.8", optional = true, package = "ron" }

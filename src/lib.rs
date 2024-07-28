@@ -1,6 +1,6 @@
 #![doc = include_str!("../README.md")]
-#![warn(clippy::nursery, clippy::cargo)]
-
+#![warn(clippy::nursery, clippy::cargo, clippy::pedantic)]
+#[allow(clippy::module_name_repetitions)]
 pub mod error;
 #[cfg(feature = "xml")]
 use std::io::BufReader;
@@ -24,10 +24,12 @@ pub enum ConfigFormat {
     Toml,
     Xml,
     Yaml,
+    Ron,
 }
 
 impl ConfigFormat {
     /// Get the [`ConfigType`] from a file extension
+    #[must_use]
     pub fn from_extension(extension: &str) -> Option<Self> {
         match extension.to_lowercase().as_str() {
             #[cfg(feature = "json")]
@@ -38,6 +40,8 @@ impl ConfigFormat {
             "xml" => Some(Self::Xml),
             #[cfg(feature = "yaml")]
             "yaml" | "yml" => Some(Self::Yaml),
+            #[cfg(feature = "ron")]
+            "ron" => Some(Self::Ron),
             _ => None,
         }
     }
@@ -53,10 +57,22 @@ impl ConfigFormat {
 pub trait LoadConfigFile {
     /// Load config from path with specific format, do not use extension to
     /// determine.
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`Error::FileAccess`] if the file cannot be read.
+    /// - Returns `Error::<Format>` if deserialization from file fails.
     fn load_with_specific_format(path: impl AsRef<Path>, config_type: ConfigFormat) -> Result<Self>
     where
         Self: Sized;
     /// Load config from path
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`Error::FileAccess`] if the file cannot be read.
+    /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
+    ///   supported.
+    /// - Returns `Error::<Format>` if deserialization from file fails.
     fn load(path: impl AsRef<Path>) -> Result<Self>
     where
         Self: Sized,
@@ -66,6 +82,19 @@ pub trait LoadConfigFile {
         Self::load_with_specific_format(path, config_type)
     }
     /// Load config from path, if not found, use default instead
+    ///
+    /// # Returns
+    ///
+    /// - Returns the config loaded from file if the file exists, or default
+    ///   value if the file does not exist.
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`Error::FileAccess`] if the file cannot be read by Permission
+    ///   denied or other failures.
+    /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
+    ///   supported.
+    /// - Returns `Error::<Format>` if deserialization from file fails.
     fn load_or_default(path: impl AsRef<Path>) -> Result<Self>
     where
         Self: Sized + Default,
@@ -101,6 +130,9 @@ impl<C: DeserializeOwned> LoadConfigFile for C {
             )?))?),
             #[cfg(feature = "yaml")]
             ConfigFormat::Yaml => serde_yml::from_reader(open_file(path)?).map_err(Error::Yaml),
+            #[cfg(feature = "ron")]
+            ConfigFormat::Ron => Ok(ron_crate::de::from_reader(open_file(path)?)
+                .map_err(Into::<ron_crate::Error>::into)?),
             #[allow(unreachable_patterns)]
             _ => Err(Error::UnsupportedFormat),
         }
@@ -112,12 +144,25 @@ impl<C: DeserializeOwned> LoadConfigFile for C {
 pub trait StoreConfigFile {
     /// Store config file to path with specific format, do not use extension to
     /// determine.
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`Error::FileAccess`] if the file cannot be written.
+    /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
+    ///   supported.
+    /// - Returns `Error::<Format>` if serialization to file fails.
     fn store_with_specific_format(
         &self,
         path: impl AsRef<Path>,
         config_type: ConfigFormat,
     ) -> Result<()>;
     /// Store config file to path
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
+    ///   supported.
+    /// - Returns `Error::<Format>` if serialization to file fails.
     fn store(&self, path: impl AsRef<Path>) -> Result<()>
     where
         Self: Sized,
@@ -127,6 +172,13 @@ pub trait StoreConfigFile {
         self.store_with_specific_format(path, config_type)
     }
     /// Store config file to path, if path exists, return error
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`Error::FileExists`] if the file already exists.
+    /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
+    ///   supported.
+    /// - Returns `Error::<Format>` if serialization to file fails.
     fn store_without_overwrite(&self, path: impl AsRef<Path>) -> Result<()>
     where
         Self: Sized,
@@ -165,6 +217,13 @@ impl<C: Serialize> StoreConfigFile for C {
             ConfigFormat::Yaml => {
                 serde_yml::to_writer(open_write_file(path)?, &self).map_err(Error::Yaml)
             }
+            #[cfg(feature = "ron")]
+            ConfigFormat::Ron => ron_crate::ser::to_writer_pretty(
+                open_write_file(path)?,
+                &self,
+                ron_crate::ser::PrettyConfig::default(),
+            )
+            .map_err(Error::Ron),
             #[allow(unreachable_patterns)]
             _ => Err(Error::UnsupportedFormat),
         }
@@ -278,6 +337,13 @@ mod test {
     fn test_yaml() {
         test_read_with_extension("yml");
         test_write_with_extension("yaml");
+    }
+
+    #[test]
+    #[cfg(feature = "ron")]
+    fn test_ron() {
+        test_read_with_extension("ron");
+        test_write_with_extension("ron");
     }
 
     #[test]

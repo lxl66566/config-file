@@ -34,6 +34,11 @@ pub enum Error {
     #[error("couldn't parse YAML file")]
     Yaml(#[from] serde_yml::Error),
 
+    /// There was an error while parsing the Ron data
+    #[cfg(feature = "ron")]
+    #[error("couldn't parse Ron file")]
+    Ron(#[from] ron_crate::Error),
+
     /// We don't know how to parse this format according to the file extension
     #[error("don't know how to parse file")]
     UnsupportedFormat,

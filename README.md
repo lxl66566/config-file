@@ -1,13 +1,27 @@
-# config-file
+# config-file2
 
-Extreamly easy to load and store your configuration file!
+Extremely easy to load and store your configuration file!
 
-## Features
+## Usage
 
-- `toml` (enabled by default)
-- `json`
-- `xml`
-- `yaml`
+1. Add dependency:
+   ```bash
+   cargo add config-file2
+   ```
+2. Enable which format you want to use in features.
+   - `all`
+   - `toml` (enabled by default)
+   - `json`
+   - `xml`
+   - `yaml`
+   - [`ron`](https://github.com/ron-rs/ron)
+
+Here's an example of how to use it with json and yaml format:
+
+```toml
+[dependencies]
+config-file2 = { version = "0.3", features = ["json", "yaml"] }
+```
 
 ## Examples
 
