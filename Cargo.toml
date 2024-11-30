@@ -33,3 +33,6 @@ serde_yml = { version = "0.0.11", optional = true }
 toml_crate = { version = "0.8.15", optional = true, package = "toml" }
 quick-xml = { version = "0.36.0", features = ["serialize"], optional = true }
 ron_crate = { version = "0.8", optional = true, package = "ron" }
+
+[dev-dependencies]
+tempfile = "3.14.0"

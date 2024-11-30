@@ -1,3 +1,4 @@
+#![feature(try_blocks)]
 #![doc = include_str!("../README.md")]
 #![warn(clippy::nursery, clippy::cargo, clippy::pedantic)]
 #[allow(clippy::module_name_repetitions)]
@@ -6,6 +7,7 @@ pub mod error;
 use std::io::BufReader;
 use std::{
     ffi::OsStr,
+    fmt::Debug,
     fs::{File, OpenOptions},
     io::Write,
     path::Path,
@@ -55,17 +57,31 @@ impl ConfigFormat {
 /// Trait for loading a struct from a configuration file.
 /// This trait is automatically implemented when [`serde::Deserialize`] is.
 pub trait LoadConfigFile {
-    /// Load config from path with specific format, do not use extension to
-    /// determine.
+    /// Load config from path with specific format, *do not use extension to
+    /// determine*.
+    ///
+    /// # Returns
+    ///
+    /// - Returns `Ok(Some(config))` if the file exists.
+    /// - Returns `Ok(None)` if the file does not exist.
     ///
     /// # Errors
     ///
     /// - Returns [`Error::FileAccess`] if the file cannot be read.
     /// - Returns `Error::<Format>` if deserialization from file fails.
-    fn load_with_specific_format(path: impl AsRef<Path>, config_type: ConfigFormat) -> Result<Self>
+    fn load_with_specific_format(
+        path: impl AsRef<Path>,
+        config_type: ConfigFormat,
+    ) -> Result<Option<Self>>
     where
         Self: Sized;
-    /// Load config from path
+
+    /// Load config from path.
+    ///
+    /// # Returns
+    ///
+    /// - Returns `Ok(Some(config))` if the file exists.
+    /// - Returns `Ok(None)` if the file does not exist.
     ///
     /// # Errors
     ///
@@ -73,7 +89,7 @@ pub trait LoadConfigFile {
     /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
     ///   supported.
     /// - Returns `Error::<Format>` if deserialization from file fails.
-    fn load(path: impl AsRef<Path>) -> Result<Self>
+    fn load(path: impl AsRef<Path>) -> Result<Option<Self>>
     where
         Self: Sized,
     {
@@ -81,6 +97,7 @@ pub trait LoadConfigFile {
         let config_type = ConfigFormat::from_path(path).ok_or(Error::UnsupportedFormat)?;
         Self::load_with_specific_format(path, config_type)
     }
+
     /// Load config from path, if not found, use default instead
     ///
     /// # Returns
@@ -99,42 +116,44 @@ pub trait LoadConfigFile {
     where
         Self: Sized + Default,
     {
-        match Self::load(path) {
-            Err(error::Error::FileAccess(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-                Ok(Self::default())
-            }
-            other => other,
-        }
+        Self::load(path).map(std::option::Option::unwrap_or_default)
     }
 }
 
 impl<C: DeserializeOwned> LoadConfigFile for C {
-    fn load_with_specific_format(path: impl AsRef<Path>, config_type: ConfigFormat) -> Result<Self>
+    fn load_with_specific_format(
+        path: impl AsRef<Path>,
+        config_type: ConfigFormat,
+    ) -> Result<Option<Self>>
     where
         Self: Sized,
     {
         let path = path.as_ref();
-        match config_type {
-            #[cfg(feature = "json")]
-            ConfigFormat::Json => serde_json::from_reader(open_file(path)?).map_err(Error::Json),
-            #[cfg(feature = "toml")]
-            ConfigFormat::Toml => Ok(toml::from_str(
-                std::fs::read_to_string(path)
-                    .map_err(Error::FileAccess)?
-                    .as_str(),
-            )
-            .map_err(TomlError::DeserializationError)?),
-            #[cfg(feature = "xml")]
-            ConfigFormat::Xml => Ok(quick_xml::de::from_reader(BufReader::new(open_file(
-                path,
-            )?))?),
-            #[cfg(feature = "yaml")]
-            ConfigFormat::Yaml => serde_yml::from_reader(open_file(path)?).map_err(Error::Yaml),
-            #[cfg(feature = "ron")]
-            ConfigFormat::Ron => Ok(ron_crate::de::from_reader(open_file(path)?)
-                .map_err(Into::<ron_crate::Error>::into)?),
-            #[allow(unreachable_patterns)]
-            _ => Err(Error::UnsupportedFormat),
+
+        let res: Result<C> = try {
+            match config_type {
+                #[cfg(feature = "json")]
+                ConfigFormat::Json => serde_json::from_reader(open_file(path)?)?,
+                #[cfg(feature = "toml")]
+                ConfigFormat::Toml => toml::from_str(std::fs::read_to_string(path)?.as_str())
+                    .map_err(TomlError::DeserializationError)?,
+                #[cfg(feature = "xml")]
+                ConfigFormat::Xml => quick_xml::de::from_reader(BufReader::new(open_file(path)?))?,
+                #[cfg(feature = "yaml")]
+                ConfigFormat::Yaml => serde_yml::from_reader(open_file(path)?)?,
+                #[cfg(feature = "ron")]
+                ConfigFormat::Ron => ron_crate::de::from_reader(open_file(path)?)
+                    .map_err(Into::<ron_crate::Error>::into)?,
+                #[allow(unreachable_patterns)]
+                _ => return Err(Error::UnsupportedFormat),
+            }
+        };
+        match res {
+            Ok(config) => Ok(Some(config)),
+            Err(crate::Error::FileAccess(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                Ok(None)
+            }
+            Err(error) => Err(error),
         }
     }
 }
@@ -143,7 +162,8 @@ impl<C: DeserializeOwned> LoadConfigFile for C {
 /// This trait is automatically implemented when [`serde::Serialize`] is.
 pub trait StoreConfigFile {
     /// Store config file to path with specific format, do not use extension to
-    /// determine.
+    /// determine. If the file already exists, the config file
+    /// will be overwritten.
     ///
     /// # Errors
     ///
@@ -156,7 +176,9 @@ pub trait StoreConfigFile {
         path: impl AsRef<Path>,
         config_type: ConfigFormat,
     ) -> Result<()>;
-    /// Store config file to path
+
+    /// Store config file to path. If the file already exists, the config file
+    /// will be overwritten.
     ///
     /// # Errors
     ///
@@ -233,7 +255,7 @@ impl<C: Serialize> StoreConfigFile for C {
 /// Open a file in read-only mode
 #[allow(unused)]
 fn open_file(path: &Path) -> Result<File> {
-    File::open(path).map_err(Error::FileAccess)
+    Ok(File::open(path)?)
 }
 
 /// Open a file in write mode
@@ -252,9 +274,9 @@ fn open_write_file(path: &Path) -> Result<File> {
 
 #[cfg(test)]
 mod test {
-    use std::env::temp_dir;
 
     use serde::Deserialize;
+    use tempfile::TempDir;
 
     use super::*;
 
@@ -285,17 +307,20 @@ mod test {
 
     fn test_read_with_extension(extension: &str) {
         let config = TestConfig::load(format!("testdata/config.{extension}"));
-        assert_eq!(config.unwrap(), TestConfig::example());
+        assert_eq!(config.unwrap().unwrap(), TestConfig::example());
     }
 
     fn test_write_with_extension(extension: &str) {
-        let mut temp = temp_dir().join("config");
+        let tempdir = TempDir::new().unwrap();
+        let mut temp = tempdir.path().join("config");
         temp.set_extension(extension);
         TestConfig::example().store(dbg!(&temp)).unwrap();
         assert!(temp.is_file());
         dbg!(std::fs::read_to_string(&temp).unwrap());
-        assert_eq!(TestConfig::example(), TestConfig::load(&temp).unwrap());
-        std::fs::remove_file(temp).unwrap();
+        assert_eq!(
+            TestConfig::example(),
+            TestConfig::load(&temp).unwrap().unwrap()
+        );
     }
 
     #[test]
@@ -308,7 +333,7 @@ mod test {
     #[cfg(feature = "toml")]
     fn test_file_not_found() {
         let config = TestConfig::load("/tmp/foobar.toml");
-        assert!(matches!(config, Err(Error::FileAccess(_))));
+        assert!(config.unwrap().is_none());
     }
 
     #[test]
@@ -349,33 +374,36 @@ mod test {
     #[test]
     #[cfg(feature = "toml")]
     fn test_store_without_overwrite() {
-        let temp = temp_dir().join("test_store_without_overwrite.toml");
+        let tempdir = TempDir::new().unwrap();
+        let temp = tempdir.path().join("test_store_without_overwrite.toml");
         std::fs::File::create(&temp).unwrap();
         assert!(TestConfig::example()
             .store_without_overwrite(dbg!(&temp))
             .is_err());
-        std::fs::remove_file(temp).unwrap();
     }
 
     #[test]
     #[cfg(all(feature = "toml", feature = "yaml"))]
     fn test_store_load_with_specific_format() {
-        let temp = temp_dir().join("test_store_load_with_specific_format.toml");
+        let tempdir = TempDir::new().unwrap();
+        let temp = tempdir
+            .path()
+            .join("test_store_load_with_specific_format.toml");
         std::fs::File::create(&temp).unwrap();
         TestConfig::example()
             .store_with_specific_format(dbg!(&temp), ConfigFormat::Yaml)
             .unwrap();
         assert!(TestConfig::load(&temp).is_err());
         assert!(TestConfig::load_with_specific_format(&temp, ConfigFormat::Yaml).is_ok());
-        std::fs::remove_file(temp).unwrap();
     }
 
     #[test]
     #[cfg(feature = "toml")]
     fn test_load_or_default() {
-        let temp = temp_dir().join("test_load_or_default.toml");
+        let tempdir = TempDir::new().unwrap();
+        let temp = tempdir.path().join("test_load_or_default.toml");
         assert_eq!(
-            TestConfig::load_or_default(&temp).unwrap(),
+            TestConfig::load_or_default(&temp).expect("load_or_default failed"),
             TestConfig::default()
         );
     }
