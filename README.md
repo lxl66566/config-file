@@ -38,7 +38,7 @@ struct Config {
 Config { host: "example.com".into() }.store("/tmp/myconfig.toml").unwrap();
 
 // load
-let config = Config::load("/tmp/myconfig.toml").unwrap();
+let config = Config::load("/tmp/myconfig.toml").unwrap().unwrap();
 assert_eq!(config.host.as_str(), "example.com");
 ```
 

@@ -1,4 +1,3 @@
-#![feature(try_blocks)]
 #![doc = include_str!("../README.md")]
 #![warn(clippy::nursery, clippy::cargo, clippy::pedantic)]
 #[allow(clippy::module_name_repetitions)]
@@ -120,6 +119,16 @@ pub trait LoadConfigFile {
     }
 }
 
+macro_rules! not_found_to_none {
+    ($input:expr) => {
+        match $input {
+            Ok(config) => Ok(Some(config)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    };
+}
+
 impl<C: DeserializeOwned> LoadConfigFile for C {
     fn load_with_specific_format(
         path: impl AsRef<Path>,
@@ -130,30 +139,31 @@ impl<C: DeserializeOwned> LoadConfigFile for C {
     {
         let path = path.as_ref();
 
-        let res: Result<C> = try {
-            match config_type {
-                #[cfg(feature = "json")]
-                ConfigFormat::Json => serde_json::from_reader(open_file(path)?)?,
-                #[cfg(feature = "toml")]
-                ConfigFormat::Toml => toml::from_str(std::fs::read_to_string(path)?.as_str())
-                    .map_err(TomlError::DeserializationError)?,
-                #[cfg(feature = "xml")]
-                ConfigFormat::Xml => quick_xml::de::from_reader(BufReader::new(open_file(path)?))?,
-                #[cfg(feature = "yaml")]
-                ConfigFormat::Yaml => serde_yml::from_reader(open_file(path)?)?,
-                #[cfg(feature = "ron")]
-                ConfigFormat::Ron => ron_crate::de::from_reader(open_file(path)?)
-                    .map_err(Into::<ron_crate::Error>::into)?,
-                #[allow(unreachable_patterns)]
-                _ => return Err(Error::UnsupportedFormat),
-            }
-        };
-        match res {
-            Ok(config) => Ok(Some(config)),
-            Err(crate::Error::FileAccess(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-                Ok(None)
-            }
-            Err(error) => Err(error),
+        match config_type {
+            #[cfg(feature = "json")]
+            ConfigFormat::Json => Ok(not_found_to_none!(open_file(path))?
+                .map(|x| serde_json::from_reader(x))
+                .transpose()?),
+            #[cfg(feature = "toml")]
+            ConfigFormat::Toml => Ok(not_found_to_none!(std::fs::read_to_string(path))?
+                .map(|x| toml::from_str(x.as_str()))
+                .transpose()
+                .map_err(TomlError::DeserializationError)?),
+            #[cfg(feature = "xml")]
+            ConfigFormat::Xml => Ok(not_found_to_none!(open_file(path))?
+                .map(|x| quick_xml::de::from_reader(BufReader::new(x)))
+                .transpose()?),
+            #[cfg(feature = "yaml")]
+            ConfigFormat::Yaml => Ok(not_found_to_none!(open_file(path))?
+                .map(|x| serde_yml::from_reader(x))
+                .transpose()?),
+            #[cfg(feature = "ron")]
+            ConfigFormat::Ron => Ok(not_found_to_none!(open_file(path))?
+                .map(|x| ron_crate::de::from_reader(x))
+                .transpose()
+                .map_err(Into::<ron_crate::Error>::into)?),
+            #[allow(unreachable_patterns)]
+            _ => Err(Error::UnsupportedFormat),
         }
     }
 }
@@ -254,8 +264,8 @@ impl<C: Serialize> StoreConfigFile for C {
 
 /// Open a file in read-only mode
 #[allow(unused)]
-fn open_file(path: &Path) -> Result<File> {
-    Ok(File::open(path)?)
+fn open_file(path: &Path) -> std::io::Result<File> {
+    File::open(path)
 }
 
 /// Open a file in write mode
