@@ -13,7 +13,7 @@ use std::{
 };
 
 pub use error::Result;
-use error::{Error, TomlError};
+use error::{Error, TomlError, XmlError};
 use serde::{de::DeserializeOwned, Serialize};
 #[cfg(feature = "toml")]
 use toml_crate as toml;
@@ -152,7 +152,8 @@ impl<C: DeserializeOwned> LoadConfigFile for C {
             #[cfg(feature = "xml")]
             ConfigFormat::Xml => Ok(not_found_to_none!(open_file(path))?
                 .map(|x| quick_xml::de::from_reader(BufReader::new(x)))
-                .transpose()?),
+                .transpose()
+                .map_err(XmlError::DeserializationError)?),
             #[cfg(feature = "yaml")]
             ConfigFormat::Yaml => Ok(not_found_to_none!(open_file(path))?
                 .map(|x| serde_yml::from_reader(x))
@@ -244,7 +245,10 @@ impl<C: Serialize> StoreConfigFile for C {
                 Ok(())
             }
             #[cfg(feature = "xml")]
-            ConfigFormat::Xml => Ok(std::fs::write(path, quick_xml::se::to_string(&self)?)?),
+            ConfigFormat::Xml => Ok(std::fs::write(
+                path,
+                quick_xml::se::to_string(&self).map_err(XmlError::SerializationError)?,
+            )?),
             #[cfg(feature = "yaml")]
             ConfigFormat::Yaml => {
                 serde_yml::to_writer(open_write_file(path)?, &self).map_err(Error::Yaml)

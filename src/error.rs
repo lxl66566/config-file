@@ -27,7 +27,7 @@ pub enum Error {
     /// There was an error while parsing the XML data
     #[cfg(feature = "xml")]
     #[error("couldn't parse XML file")]
-    Xml(#[from] quick_xml::DeError),
+    Xml(#[from] XmlError),
 
     /// There was an error while parsing the YAML data
     #[cfg(feature = "yaml")]
@@ -55,4 +55,17 @@ pub enum TomlError {
     /// TOML serialization error
     #[error("Toml serialization error: {0}")]
     SerializationError(#[from] toml::ser::Error),
+}
+
+/// Merge two XML errors into one
+#[cfg(feature = "toml")]
+#[derive(Debug, thiserror::Error)]
+pub enum XmlError {
+    /// XML deserialization error
+    #[error("Xml deserialization error: {0}")]
+    DeserializationError(#[from] quick_xml::DeError),
+
+    /// XML serialization error
+    #[error("Xml serialization error: {0}")]
+    SerializationError(#[from] quick_xml::SeError),
 }
