@@ -20,7 +20,7 @@ Here's an example of how to use it with json and yaml format:
 
 ```toml
 [dependencies]
-config-file2 = { version = "0.3", features = ["json", "yaml"] }
+config-file2 = { version = "0.4", features = ["json", "yaml"] }
 ```
 
 ## Examples
@@ -42,7 +42,28 @@ let config = Config::load("/tmp/myconfig.toml").unwrap().unwrap();
 assert_eq!(config.host.as_str(), "example.com");
 ```
 
-## more functions
+Another way to store a struct into a configuration file:
+
+```rust, no_run
+use config_file2::Storable;
+use serde::{Serialize, Deserialize};
+use std::path::{Path, PathBuf};
+
+#[derive(Serialize)]
+struct TestStorable {
+    path: PathBuf,
+}
+
+impl Storable for TestStorable {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+TestStorable { path: PathBuf::from("/tmp/myconfig.toml") }.store().unwrap();
+```
+
+## more
 
 ```rust, ignore
 fn load_with_specific_format(path: impl AsRef<Path>, config_type: ConfigFormat) -> Result<Self>;

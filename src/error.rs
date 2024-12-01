@@ -58,7 +58,7 @@ pub enum TomlError {
 }
 
 /// Merge two XML errors into one
-#[cfg(feature = "toml")]
+#[cfg(feature = "xml")]
 #[derive(Debug, thiserror::Error)]
 pub enum XmlError {
     /// XML deserialization error

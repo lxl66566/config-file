@@ -2,8 +2,6 @@
 #![warn(clippy::nursery, clippy::cargo, clippy::pedantic)]
 #[allow(clippy::module_name_repetitions)]
 pub mod error;
-#[cfg(feature = "xml")]
-use std::io::BufReader;
 use std::{
     ffi::OsStr,
     fmt::Debug,
@@ -12,11 +10,13 @@ use std::{
     path::Path,
 };
 
+use error::Error;
 pub use error::Result;
-use error::{Error, TomlError, XmlError};
 use serde::{de::DeserializeOwned, Serialize};
 #[cfg(feature = "toml")]
-use toml_crate as toml;
+use {error::TomlError, toml_crate as toml};
+#[cfg(feature = "xml")]
+use {error::XmlError, std::io::BufReader};
 
 /// Format of configuration file.
 #[derive(Debug, Clone, Copy)]
@@ -266,6 +266,53 @@ impl<C: Serialize> StoreConfigFile for C {
     }
 }
 
+/// A more easy way to store a struct into a configuration file.
+///
+/// Just impl `Storable::path(&self) -> &Path;` to your struct, and then you can
+/// use `store_with_specific_format`, `store`, `store_without_overwrite`
+/// directly by calling the method on your struct.
+pub trait Storable: Serialize + Sized {
+    /// impl by struct.
+    fn path(&self) -> &Path;
+
+    /// Store config file to path with specific format, do not use extension to
+    /// determine. If the file already exists, the config file
+    /// will be overwritten.
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`Error::FileAccess`] if the file cannot be written.
+    /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
+    ///   supported.
+    /// - Returns `Error::<Format>` if serialization to file fails.
+    fn store_with_specific_format(&self, config_type: ConfigFormat) -> Result<()> {
+        StoreConfigFile::store_with_specific_format(self, self.path(), config_type)
+    }
+
+    /// Store config file to path. If the file already exists, the config file
+    /// will be overwritten.
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
+    ///   supported.
+    /// - Returns `Error::<Format>` if serialization to file fails.
+    fn store(&self) -> Result<()> {
+        StoreConfigFile::store(self, self.path())
+    }
+    /// Store config file to path, if path exists, return error
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`Error::FileExists`] if the file already exists.
+    /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
+    ///   supported.
+    /// - Returns `Error::<Format>` if serialization to file fails.
+    fn store_without_overwrite(&self) -> Result<()> {
+        StoreConfigFile::store_without_overwrite(self, self.path())
+    }
+}
+
 /// Open a file in read-only mode
 #[allow(unused)]
 fn open_file(path: &Path) -> std::io::Result<File> {
@@ -420,5 +467,34 @@ mod test {
             TestConfig::load_or_default(&temp).expect("load_or_default failed"),
             TestConfig::default()
         );
+    }
+}
+
+#[cfg(test)]
+mod storable {
+    use std::path::{Path, PathBuf};
+
+    use serde::Serialize;
+    use tempfile::TempDir;
+
+    use super::Storable;
+
+    #[derive(Serialize)]
+    struct TestStorable {
+        path: PathBuf,
+    }
+
+    impl Storable for TestStorable {
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    #[test]
+    fn test_store() {
+        let tempdir = TempDir::new().unwrap();
+        let temp = tempdir.path().join("test_store.toml");
+        TestStorable { path: temp.clone() }.store().unwrap();
+        assert!(temp.is_file());
     }
 }
