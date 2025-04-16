@@ -254,12 +254,16 @@ impl<C: Serialize> StoreConfigFile for C {
                 serde_yml::to_writer(open_write_file(path)?, &self).map_err(Error::Yaml)
             }
             #[cfg(feature = "ron")]
-            ConfigFormat::Ron => ron_crate::ser::to_writer_pretty(
-                open_write_file(path)?,
-                &self,
-                ron_crate::ser::PrettyConfig::default(),
-            )
-            .map_err(Error::Ron),
+            ConfigFormat::Ron => {
+                open_write_file(path)?.write_all(
+                    ron_crate::ser::to_string_pretty(
+                        &self,
+                        ron_crate::ser::PrettyConfig::default(),
+                    )?
+                    .as_bytes(),
+                )?;
+                Ok(())
+            }
             #[allow(unreachable_patterns)]
             _ => Err(Error::UnsupportedFormat),
         }
