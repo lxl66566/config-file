@@ -273,7 +273,7 @@ impl<C: Serialize> StoreConfigFile for C {
 /// directly by calling the method on your struct.
 pub trait Storable: Serialize + Sized {
     /// impl by struct.
-    fn path(&self) -> &Path;
+    fn path(&self) -> impl AsRef<Path>;
 
     /// Store config file to path with specific format, do not use extension to
     /// determine. If the file already exists, the config file
@@ -286,7 +286,7 @@ pub trait Storable: Serialize + Sized {
     ///   supported.
     /// - Returns `Error::<Format>` if serialization to file fails.
     fn store_with_specific_format(&self, config_type: ConfigFormat) -> Result<()> {
-        StoreConfigFile::store_with_specific_format(self, self.path(), config_type)
+        StoreConfigFile::store_with_specific_format(self, self.path().as_ref(), config_type)
     }
 
     /// Store config file to path. If the file already exists, the config file
@@ -485,7 +485,7 @@ mod storable {
     }
 
     impl Storable for TestStorable {
-        fn path(&self) -> &Path {
+        fn path(&self) -> impl AsRef<Path> {
             &self.path
         }
     }

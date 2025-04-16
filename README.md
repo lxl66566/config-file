@@ -55,7 +55,7 @@ struct TestStorable {
 }
 
 impl Storable for TestStorable {
-    fn path(&self) -> &Path {
+    fn path(&self) -> impl AsRef<Path> {
         &self.path
     }
 }
