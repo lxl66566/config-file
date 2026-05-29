@@ -12,6 +12,7 @@ Extremely easy to load and store your configuration file!
    - `all`
    - `toml` (enabled by default)
    - `json`
+   - `json5`
    - `xml`
    - `yaml`
    - [`ron`](https://github.com/ron-rs/ron)
