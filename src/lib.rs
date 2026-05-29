@@ -156,7 +156,7 @@ impl<C: DeserializeOwned> LoadConfigFile for C {
                 .map_err(XmlError::DeserializationError)?),
             #[cfg(feature = "yaml")]
             ConfigFormat::Yaml => Ok(not_found_to_none!(open_file(path))?
-                .map(|x| serde_yml::from_reader(x))
+                .map(|x| yaml_serde::from_reader(x))
                 .transpose()?),
             #[cfg(feature = "ron")]
             ConfigFormat::Ron => Ok(not_found_to_none!(open_file(path))?
@@ -251,7 +251,7 @@ impl<C: Serialize> StoreConfigFile for C {
             )?),
             #[cfg(feature = "yaml")]
             ConfigFormat::Yaml => {
-                serde_yml::to_writer(open_write_file(path)?, &self).map_err(Error::Yaml)
+                yaml_serde::to_writer(open_write_file(path)?, &self).map_err(Error::Yaml)
             }
             #[cfg(feature = "ron")]
             ConfigFormat::Ron => {

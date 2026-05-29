@@ -32,7 +32,7 @@ pub enum Error {
     /// There was an error while parsing the YAML data
     #[cfg(feature = "yaml")]
     #[error("couldn't parse YAML file")]
-    Yaml(#[from] serde_yml::Error),
+    Yaml(#[from] yaml_serde::Error),
 
     /// There was an error while parsing the Ron data
     #[cfg(feature = "ron")]
