@@ -11,8 +11,10 @@ use std::{
 };
 
 use error::Error;
+#[cfg(feature = "json5")]
+use error::Json5Error;
 pub use error::Result;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 #[cfg(feature = "toml")]
 use {error::TomlError, toml_crate as toml};
 #[cfg(feature = "xml")]
@@ -22,6 +24,7 @@ use {error::XmlError, std::io::BufReader};
 #[derive(Debug, Clone, Copy)]
 pub enum ConfigFormat {
     Json,
+    Json5,
     Toml,
     Xml,
     Yaml,
@@ -35,6 +38,8 @@ impl ConfigFormat {
         match extension.to_lowercase().as_str() {
             #[cfg(feature = "json")]
             "json" => Some(Self::Json),
+            #[cfg(feature = "json5")]
+            "json5" => Some(Self::Json5),
             #[cfg(feature = "toml")]
             "toml" => Some(Self::Toml),
             #[cfg(feature = "xml")]
@@ -144,6 +149,11 @@ impl<C: DeserializeOwned> LoadConfigFile for C {
             ConfigFormat::Json => Ok(not_found_to_none!(open_file(path))?
                 .map(|x| serde_json::from_reader(x))
                 .transpose()?),
+            #[cfg(feature = "json5")]
+            ConfigFormat::Json5 => Ok(not_found_to_none!(std::fs::read_to_string(path))?
+                .map(|x| json_five::from_str(x.as_str()))
+                .transpose()
+                .map_err(Json5Error::DeserializationError)?),
             #[cfg(feature = "toml")]
             ConfigFormat::Toml => Ok(not_found_to_none!(std::fs::read_to_string(path))?
                 .map(|x| toml::from_str(x.as_str()))
@@ -234,6 +244,15 @@ impl<C: Serialize> StoreConfigFile for C {
             #[cfg(feature = "json")]
             ConfigFormat::Json => {
                 serde_json::to_writer_pretty(open_write_file(path)?, &self).map_err(Error::Json)
+            }
+            #[cfg(feature = "json5")]
+            ConfigFormat::Json5 => {
+                open_write_file(path)?.write_all(
+                    json_five::to_string(&self)
+                        .map_err(Json5Error::SerializationError)?
+                        .as_bytes(),
+                )?;
+                Ok(())
             }
             #[cfg(feature = "toml")]
             ConfigFormat::Toml => {
@@ -409,6 +428,13 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "json5")]
+    fn test_json5() {
+        test_read_with_extension("json5");
+        test_write_with_extension("json5");
+    }
+
+    #[test]
     #[cfg(feature = "toml")]
     fn test_toml() {
         test_read_with_extension("toml");
@@ -442,9 +468,11 @@ mod test {
         let tempdir = TempDir::new().unwrap();
         let temp = tempdir.path().join("test_store_without_overwrite.toml");
         std::fs::File::create(&temp).unwrap();
-        assert!(TestConfig::example()
-            .store_without_overwrite(dbg!(&temp))
-            .is_err());
+        assert!(
+            TestConfig::example()
+                .store_without_overwrite(dbg!(&temp))
+                .is_err()
+        );
     }
 
     #[test]

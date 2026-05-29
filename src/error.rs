@@ -39,6 +39,11 @@ pub enum Error {
     #[error("couldn't parse Ron file")]
     Ron(#[from] ron_crate::Error),
 
+    /// There was an error while parsing the JSON5 data
+    #[cfg(feature = "json5")]
+    #[error("couldn't parse JSON5 file")]
+    Json5(#[from] Json5Error),
+
     /// We don't know how to parse this format according to the file extension
     #[error("don't know how to parse file")]
     UnsupportedFormat,
@@ -68,4 +73,17 @@ pub enum XmlError {
     /// XML serialization error
     #[error("Xml serialization error: {0}")]
     SerializationError(#[from] quick_xml::SeError),
+}
+
+/// Merge two JSON5 errors into one
+#[cfg(feature = "json5")]
+#[derive(Debug, thiserror::Error)]
+pub enum Json5Error {
+    /// JSON5 deserialization error
+    #[error("Json5 deserialization error: {0}")]
+    DeserializationError(#[from] json_five::de::SerdeJSON5Error),
+
+    /// JSON5 serialization error
+    #[error("Json5 serialization error: {0}")]
+    SerializationError(#[from] json_five::ser::SerdeJSON5Error),
 }
