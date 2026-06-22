@@ -8,7 +8,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     /// There was an error while reading the configuration file
-    #[error("couldn't read or write config file")]
+    #[error("couldn't read or write config file: {0}")]
     FileAccess(#[from] std::io::Error),
 
     #[error("file already exists")]
@@ -16,32 +16,32 @@ pub enum Error {
 
     /// There was an error while parsing the JSON data
     #[cfg(feature = "json")]
-    #[error("couldn't parse JSON file")]
+    #[error("couldn't parse JSON file: {0}")]
     Json(#[from] serde_json::Error),
 
     /// There was an error while parsing the TOML data
     #[cfg(feature = "toml")]
-    #[error("couldn't parse TOML file")]
+    #[error("couldn't parse TOML file: {0}")]
     Toml(#[from] TomlError),
 
     /// There was an error while parsing the XML data
     #[cfg(feature = "xml")]
-    #[error("couldn't parse XML file")]
+    #[error("couldn't parse XML file: {0}")]
     Xml(#[from] XmlError),
 
     /// There was an error while parsing the YAML data
     #[cfg(feature = "yaml")]
-    #[error("couldn't parse YAML file")]
+    #[error("couldn't parse YAML file: {0}")]
     Yaml(#[from] yaml_serde::Error),
 
     /// There was an error while parsing the Ron data
     #[cfg(feature = "ron")]
-    #[error("couldn't parse Ron file")]
+    #[error("couldn't parse Ron file: {0}")]
     Ron(#[from] ron_crate::Error),
 
     /// There was an error while parsing the JSON5 data
     #[cfg(feature = "json5")]
-    #[error("couldn't parse JSON5 file")]
+    #[error("couldn't parse JSON5 file: {0}")]
     Json5(#[from] Json5Error),
 
     /// We don't know how to parse this format according to the file extension
