@@ -11,7 +11,7 @@ jobs:
     name: cargo test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache dependencies installed with cargo
         uses: actions/cache@v4
@@ -29,17 +29,3 @@ jobs:
       - run: cargo fmt -- --check
       - run: cargo test --all-targets --all-features && cargo test --all-features --doc
       - run: cargo clippy --all-targets --all-features -- -D warnings
-
-  auto-merge:
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.actor == 'dependabot[bot]'
-    permissions:
-      pull-requests: write
-      contents: write
-    steps:
-      - name: Enable auto-merge for Dependabot PRs
-        run: gh pr merge --auto --merge "$PR_URL"
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
