@@ -69,6 +69,6 @@ TestStorable { path: PathBuf::from("/tmp/myconfig.toml") }.store().unwrap();
 ```rust, ignore
 fn load_with_specific_format(path: impl AsRef<Path>, config_type: ConfigFormat) -> Result<Self>;
 fn load_or_default(path: impl AsRef<Path>) -> Result<Self>;
-fn store_with_specific_format(self, path: impl AsRef<Path>, config_type: ConfigFormat) -> Result<()>;
-fn store_without_overwrite(self, path: impl AsRef<Path>) -> Result<()>;
+fn store_with_specific_format(&self, path: impl AsRef<Path>, config_type: ConfigFormat) -> Result<()>;
+fn store_without_overwrite(&self, path: impl AsRef<Path>) -> Result<()>;
 ```

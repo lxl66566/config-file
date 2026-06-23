@@ -1,12 +1,19 @@
 #![doc = include_str!("../README.md")]
 #![warn(clippy::nursery, clippy::cargo, clippy::pedantic)]
-#[allow(clippy::module_name_repetitions)]
+#![allow(clippy::module_name_repetitions)]
+
 pub mod error;
+
+// `BufReader` speeds up `from_reader` based deserializers (esp. JSON, ~100x).
+// `Write` is only needed by the `write_all` based serializers.
+#[cfg(any(feature = "json", feature = "xml", feature = "yaml", feature = "ron"))]
+use std::io::BufReader;
+#[cfg(any(feature = "json5", feature = "toml", feature = "xml", feature = "ron"))]
+use std::io::Write;
 use std::{
     ffi::OsStr,
     fmt::Debug,
     fs::{File, OpenOptions},
-    io::Write,
     path::Path,
 };
 
@@ -14,14 +21,14 @@ use error::Error;
 #[cfg(feature = "json5")]
 use error::Json5Error;
 pub use error::Result;
+#[cfg(feature = "xml")]
+use error::XmlError;
 use serde::{Serialize, de::DeserializeOwned};
 #[cfg(feature = "toml")]
 use {error::TomlError, toml_crate as toml};
-#[cfg(feature = "xml")]
-use {error::XmlError, std::io::BufReader};
 
 /// Format of configuration file.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConfigFormat {
     Json,
     Json5,
@@ -32,7 +39,7 @@ pub enum ConfigFormat {
 }
 
 impl ConfigFormat {
-    /// Get the [`ConfigType`] from a file extension
+    /// Get the [`ConfigFormat`] from a file extension
     #[must_use]
     pub fn from_extension(extension: &str) -> Option<Self> {
         match extension.to_lowercase().as_str() {
@@ -52,7 +59,7 @@ impl ConfigFormat {
         }
     }
 
-    /// Get the [`ConfigType`] from a path
+    /// Get the [`ConfigFormat`] from a path
     pub fn from_path(path: &Path) -> Option<Self> {
         Self::from_extension(path.extension().and_then(OsStr::to_str)?)
     }
@@ -124,6 +131,7 @@ pub trait LoadConfigFile {
     }
 }
 
+#[allow(unused_macros)]
 macro_rules! not_found_to_none {
     ($input:expr) => {
         match $input {
@@ -135,6 +143,7 @@ macro_rules! not_found_to_none {
 }
 
 impl<C: DeserializeOwned> LoadConfigFile for C {
+    #[allow(unused_variables)]
     fn load_with_specific_format(
         path: impl AsRef<Path>,
         config_type: ConfigFormat,
@@ -147,7 +156,7 @@ impl<C: DeserializeOwned> LoadConfigFile for C {
         match config_type {
             #[cfg(feature = "json")]
             ConfigFormat::Json => Ok(not_found_to_none!(open_file(path))?
-                .map(|x| serde_json::from_reader(x))
+                .map(|x| serde_json::from_reader(BufReader::new(x)))
                 .transpose()?),
             #[cfg(feature = "json5")]
             ConfigFormat::Json5 => Ok(not_found_to_none!(std::fs::read_to_string(path))?
@@ -161,18 +170,19 @@ impl<C: DeserializeOwned> LoadConfigFile for C {
                 .map_err(TomlError::DeserializationError)?),
             #[cfg(feature = "xml")]
             ConfigFormat::Xml => Ok(not_found_to_none!(open_file(path))?
+                // `quick_xml::de::from_reader` requires `R: BufRead`.
                 .map(|x| quick_xml::de::from_reader(BufReader::new(x)))
                 .transpose()
                 .map_err(XmlError::DeserializationError)?),
             #[cfg(feature = "yaml")]
             ConfigFormat::Yaml => Ok(not_found_to_none!(open_file(path))?
-                .map(|x| yaml_serde::from_reader(x))
+                .map(|x| yaml_serde::from_reader(BufReader::new(x)))
                 .transpose()?),
             #[cfg(feature = "ron")]
             ConfigFormat::Ron => Ok(not_found_to_none!(open_file(path))?
-                .map(|x| ron_crate::de::from_reader(x))
+                .map(|x| ron_crate::de::from_reader(BufReader::new(x)))
                 .transpose()
-                .map_err(Into::<ron_crate::Error>::into)?),
+                .map_err(ron_crate::Error::from)?),
             #[allow(unreachable_patterns)]
             _ => Err(Error::UnsupportedFormat),
         }
@@ -181,10 +191,12 @@ impl<C: DeserializeOwned> LoadConfigFile for C {
 
 /// Trait for storing a struct into a configuration file.
 /// This trait is automatically implemented when [`serde::Serialize`] is.
-pub trait StoreConfigFile {
+pub trait StoreConfigFile: Serialize {
     /// Store config file to path with specific format, do not use extension to
     /// determine. If the file already exists, the config file
     /// will be overwritten.
+    ///
+    /// Parent directories are created automatically if they don't exist.
     ///
     /// # Errors
     ///
@@ -201,6 +213,8 @@ pub trait StoreConfigFile {
     /// Store config file to path. If the file already exists, the config file
     /// will be overwritten.
     ///
+    /// Parent directories are created automatically if they don't exist.
+    ///
     /// # Errors
     ///
     /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
@@ -216,6 +230,8 @@ pub trait StoreConfigFile {
     }
     /// Store config file to path, if path exists, return error
     ///
+    /// Parent directories are created automatically if they don't exist.
+    ///
     /// # Errors
     ///
     /// - Returns [`Error::FileExists`] if the file already exists.
@@ -226,10 +242,9 @@ pub trait StoreConfigFile {
     where
         Self: Sized,
     {
-        if path.as_ref().exists() {
-            return Err(Error::FileExists);
-        }
-        self.store(path)
+        let path = path.as_ref();
+        let config_type = ConfigFormat::from_path(path).ok_or(Error::UnsupportedFormat)?;
+        store_impl(self, path, config_type, false)
     }
 }
 
@@ -239,53 +254,7 @@ impl<C: Serialize> StoreConfigFile for C {
         path: impl AsRef<Path>,
         config_type: ConfigFormat,
     ) -> Result<()> {
-        let path = path.as_ref();
-        match config_type {
-            #[cfg(feature = "json")]
-            ConfigFormat::Json => {
-                serde_json::to_writer_pretty(open_write_file(path)?, &self).map_err(Error::Json)
-            }
-            #[cfg(feature = "json5")]
-            ConfigFormat::Json5 => {
-                open_write_file(path)?.write_all(
-                    json_five::to_string(&self)
-                        .map_err(Json5Error::SerializationError)?
-                        .as_bytes(),
-                )?;
-                Ok(())
-            }
-            #[cfg(feature = "toml")]
-            ConfigFormat::Toml => {
-                open_write_file(path)?.write_all(
-                    toml::to_string_pretty(&self)
-                        .map_err(TomlError::SerializationError)?
-                        .as_bytes(),
-                )?;
-                Ok(())
-            }
-            #[cfg(feature = "xml")]
-            ConfigFormat::Xml => Ok(std::fs::write(
-                path,
-                quick_xml::se::to_string(&self).map_err(XmlError::SerializationError)?,
-            )?),
-            #[cfg(feature = "yaml")]
-            ConfigFormat::Yaml => {
-                yaml_serde::to_writer(open_write_file(path)?, &self).map_err(Error::Yaml)
-            }
-            #[cfg(feature = "ron")]
-            ConfigFormat::Ron => {
-                open_write_file(path)?.write_all(
-                    ron_crate::ser::to_string_pretty(
-                        &self,
-                        ron_crate::ser::PrettyConfig::default(),
-                    )?
-                    .as_bytes(),
-                )?;
-                Ok(())
-            }
-            #[allow(unreachable_patterns)]
-            _ => Err(Error::UnsupportedFormat),
-        }
+        store_impl(self, path.as_ref(), config_type, true)
     }
 }
 
@@ -302,6 +271,8 @@ pub trait Storable: Serialize + Sized {
     /// determine. If the file already exists, the config file
     /// will be overwritten.
     ///
+    /// Parent directories are created automatically if they don't exist.
+    ///
     /// # Errors
     ///
     /// - Returns [`Error::FileAccess`] if the file cannot be written.
@@ -315,6 +286,8 @@ pub trait Storable: Serialize + Sized {
     /// Store config file to path. If the file already exists, the config file
     /// will be overwritten.
     ///
+    /// Parent directories are created automatically if they don't exist.
+    ///
     /// # Errors
     ///
     /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
@@ -324,6 +297,8 @@ pub trait Storable: Serialize + Sized {
         StoreConfigFile::store(self, self.path())
     }
     /// Store config file to path, if path exists, return error
+    ///
+    /// Parent directories are created automatically if they don't exist.
     ///
     /// # Errors
     ///
@@ -342,7 +317,8 @@ fn open_file(path: &Path) -> std::io::Result<File> {
     File::open(path)
 }
 
-/// Open a file in write mode
+/// Open a file for writing, truncating it if it already exists. Parent
+/// directories are created automatically.
 #[allow(unused)]
 fn open_write_file(path: &Path) -> Result<File> {
     if let Some(parent) = path.parent() {
@@ -354,6 +330,89 @@ fn open_write_file(path: &Path) -> Result<File> {
         .truncate(true)
         .open(path)
         .map_err(Error::FileAccess)
+}
+
+/// Open a file for writing, atomically failing with [`Error::FileExists`] if it
+/// already exists (no TOCTOU window). Parent directories are created
+/// automatically.
+#[allow(unused)]
+fn open_create_new_file(path: &Path) -> Result<File> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                Error::FileExists
+            } else {
+                Error::FileAccess(e)
+            }
+        })
+}
+
+/// Serialize `value` to `path` in the given `config_type`.
+///
+/// When `overwrite` is `true`, an existing file is truncated; when `false`, the
+/// file is created atomically via [`open_create_new_file`] and
+/// [`Error::FileExists`] is returned if it already exists.
+#[allow(unused)]
+fn store_impl<S: Serialize>(
+    value: &S,
+    path: &Path,
+    config_type: ConfigFormat,
+    overwrite: bool,
+) -> Result<()> {
+    let open: fn(&Path) -> Result<File> = if overwrite {
+        open_write_file
+    } else {
+        open_create_new_file
+    };
+    match config_type {
+        #[cfg(feature = "json")]
+        ConfigFormat::Json => serde_json::to_writer_pretty(open(path)?, value).map_err(Error::Json),
+        #[cfg(feature = "json5")]
+        ConfigFormat::Json5 => {
+            open(path)?.write_all(
+                json_five::to_string(value)
+                    .map_err(Json5Error::SerializationError)?
+                    .as_bytes(),
+            )?;
+            Ok(())
+        }
+        #[cfg(feature = "toml")]
+        ConfigFormat::Toml => {
+            open(path)?.write_all(
+                toml::to_string_pretty(value)
+                    .map_err(TomlError::SerializationError)?
+                    .as_bytes(),
+            )?;
+            Ok(())
+        }
+        #[cfg(feature = "xml")]
+        ConfigFormat::Xml => {
+            open(path)?.write_all(
+                quick_xml::se::to_string(value)
+                    .map_err(XmlError::SerializationError)?
+                    .as_bytes(),
+            )?;
+            Ok(())
+        }
+        #[cfg(feature = "yaml")]
+        ConfigFormat::Yaml => yaml_serde::to_writer(open(path)?, value).map_err(Error::Yaml),
+        #[cfg(feature = "ron")]
+        ConfigFormat::Ron => {
+            open(path)?.write_all(
+                ron_crate::ser::to_string_pretty(value, ron_crate::ser::PrettyConfig::default())?
+                    .as_bytes(),
+            )?;
+            Ok(())
+        }
+        #[allow(unreachable_patterns)]
+        _ => Err(Error::UnsupportedFormat),
+    }
 }
 
 #[cfg(test)]
@@ -398,9 +457,8 @@ mod test {
         let tempdir = TempDir::new().unwrap();
         let mut temp = tempdir.path().join("config");
         temp.set_extension(extension);
-        TestConfig::example().store(dbg!(&temp)).unwrap();
+        TestConfig::example().store(&temp).unwrap();
         assert!(temp.is_file());
-        dbg!(std::fs::read_to_string(&temp).unwrap());
         assert_eq!(
             TestConfig::example(),
             TestConfig::load(&temp).unwrap().unwrap()
@@ -470,7 +528,7 @@ mod test {
         std::fs::File::create(&temp).unwrap();
         assert!(
             TestConfig::example()
-                .store_without_overwrite(dbg!(&temp))
+                .store_without_overwrite(&temp)
                 .is_err()
         );
     }
@@ -484,7 +542,7 @@ mod test {
             .join("test_store_load_with_specific_format.toml");
         std::fs::File::create(&temp).unwrap();
         TestConfig::example()
-            .store_with_specific_format(dbg!(&temp), ConfigFormat::Yaml)
+            .store_with_specific_format(&temp, ConfigFormat::Yaml)
             .unwrap();
         assert!(TestConfig::load(&temp).is_err());
         assert!(TestConfig::load_with_specific_format(&temp, ConfigFormat::Yaml).is_ok());
