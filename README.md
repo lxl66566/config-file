@@ -43,11 +43,12 @@ let config = Config::load("/tmp/myconfig.toml").unwrap().unwrap();
 assert_eq!(config.host.as_str(), "example.com");
 ```
 
-Another way to store a struct into a configuration file:
+Another way to store a struct into a configuration file, where the struct owns
+its path via [`Storable`]:
 
 ```rust, no_run
 use config_file2::Storable;
-use serde::{Serialize, Deserialize};
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 #[derive(Serialize)]
@@ -61,7 +62,37 @@ impl Storable for TestStorable {
     }
 }
 
-TestStorable { path: PathBuf::from("/tmp/myconfig.toml") }.store().unwrap();
+TestStorable { path: PathBuf::from("/tmp/myconfig.toml") }.save().unwrap();
+```
+
+## Storing with options (builder)
+
+When you need control over pretty-printing, overwriting, or the format, use a
+builder. For an explicit path use [`StoreConfigFile::store_opts`]:
+
+```rust, no_run
+use config_file2::StoreConfigFile;
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct Config;
+
+// pretty off, no overwrite, format still auto-detected from the extension.
+Config
+    .store_opts("/tmp/myconfig.json")
+    .pretty(false)
+    .overwrite(false)
+    .execute()
+    .unwrap();
+```
+
+For a type implementing [`Storable`], use [`Storable::save_opts`] (bound to the
+intrinsic path):
+
+```rust, ignore
+use config_file2::Storable;
+
+config.save_opts().pretty(false).execute().unwrap();
 ```
 
 ## more
@@ -69,6 +100,10 @@ TestStorable { path: PathBuf::from("/tmp/myconfig.toml") }.store().unwrap();
 ```rust, ignore
 fn load_with_specific_format(path: impl AsRef<Path>, config_type: ConfigFormat) -> Result<Self>;
 fn load_or_default(path: impl AsRef<Path>) -> Result<Self>;
+fn store(&self, path: impl AsRef<Path>) -> Result<()>;
 fn store_with_specific_format(&self, path: impl AsRef<Path>, config_type: ConfigFormat) -> Result<()>;
-fn store_without_overwrite(&self, path: impl AsRef<Path>) -> Result<()>;
+fn store_opts(&self, path: impl AsRef<Path>) -> StoreBuilder<'_, Self>;
+// Storable:
+fn save(&self) -> Result<()>;
+fn save_opts(&self) -> StoreBuilder<'_, Self>;
 ```

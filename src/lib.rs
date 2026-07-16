@@ -12,9 +12,9 @@ use std::io::BufReader;
 use std::io::Write;
 use std::{
     ffi::OsStr,
-    fmt::Debug,
+    fmt::{self, Debug},
     fs::{File, OpenOptions},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use error::Error;
@@ -228,23 +228,36 @@ pub trait StoreConfigFile: Serialize {
         let config_type = ConfigFormat::from_path(path).ok_or(Error::UnsupportedFormat)?;
         self.store_with_specific_format(path, config_type)
     }
-    /// Store config file to path, if path exists, return error
+
+    /// Returns a [`StoreBuilder`] for storing `self` with full control over
+    /// [`pretty`][StoreBuilder::pretty], [`overwrite`][StoreBuilder::overwrite]
+    /// and [`format`][StoreBuilder::format]. Finish the chain with
+    /// [`StoreBuilder::execute`].
     ///
-    /// Parent directories are created automatically if they don't exist.
+    /// Defaults match [`StoreConfigFile::store`]: pretty on, overwrite on,
+    /// format auto-detected from the path extension.
     ///
-    /// # Errors
+    /// # Examples
     ///
-    /// - Returns [`Error::FileExists`] if the file already exists.
-    /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
-    ///   supported.
-    /// - Returns `Error::<Format>` if serialization to file fails.
-    fn store_without_overwrite(&self, path: impl AsRef<Path>) -> Result<()>
+    /// ```no_run
+    /// use config_file2::StoreConfigFile;
+    /// use serde::Serialize;
+    ///
+    /// #[derive(Serialize)]
+    /// struct Config;
+    ///
+    /// Config
+    ///     .store_opts("/tmp/config.json")
+    ///     .pretty(false)
+    ///     .overwrite(false)
+    ///     .execute()
+    ///     .unwrap();
+    /// ```
+    fn store_opts(&self, path: impl AsRef<Path>) -> StoreBuilder<'_, Self>
     where
         Self: Sized,
     {
-        let path = path.as_ref();
-        let config_type = ConfigFormat::from_path(path).ok_or(Error::UnsupportedFormat)?;
-        store_impl(self, path, config_type, false)
+        StoreBuilder::new(self, path)
     }
 }
 
@@ -254,37 +267,25 @@ impl<C: Serialize> StoreConfigFile for C {
         path: impl AsRef<Path>,
         config_type: ConfigFormat,
     ) -> Result<()> {
-        store_impl(self, path.as_ref(), config_type, true)
+        store_impl(self, path.as_ref(), config_type, true, true)
     }
 }
 
-/// A more easy way to store a struct into a configuration file.
+/// A struct that knows the path it stores itself at.
 ///
-/// Just impl `Storable::path(&self) -> &Path;` to your struct, and then you can
-/// use `store_with_specific_format`, `store`, `store_without_overwrite`
-/// directly by calling the method on your struct.
+/// Implement [`Storable::path`] to give your type an intrinsic config path,
+/// then use [`Storable::save`] / [`Storable::save_opts`] to write it without
+/// passing a path every call.
+///
+/// `Storable` intentionally uses method names (`save`, `save_opts`) that differ
+/// from [`StoreConfigFile`] (`store`, `store_opts`), so importing both traits
+/// never causes method-name ambiguity on types that implement both.
 pub trait Storable: Serialize + Sized {
-    /// impl by struct.
+    /// The path this struct stores itself at.
     fn path(&self) -> impl AsRef<Path>;
 
-    /// Store config file to path with specific format, do not use extension to
-    /// determine. If the file already exists, the config file
-    /// will be overwritten.
-    ///
-    /// Parent directories are created automatically if they don't exist.
-    ///
-    /// # Errors
-    ///
-    /// - Returns [`Error::FileAccess`] if the file cannot be written.
-    /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
-    ///   supported.
-    /// - Returns `Error::<Format>` if serialization to file fails.
-    fn store_with_specific_format(&self, config_type: ConfigFormat) -> Result<()> {
-        StoreConfigFile::store_with_specific_format(self, self.path().as_ref(), config_type)
-    }
-
-    /// Store config file to path. If the file already exists, the config file
-    /// will be overwritten.
+    /// Save this struct to its [`path`][Storable::path] with default options
+    /// (pretty on, overwrite on, format auto-detected from the extension).
     ///
     /// Parent directories are created automatically if they don't exist.
     ///
@@ -293,21 +294,36 @@ pub trait Storable: Serialize + Sized {
     /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
     ///   supported.
     /// - Returns `Error::<Format>` if serialization to file fails.
-    fn store(&self) -> Result<()> {
+    fn save(&self) -> Result<()> {
         StoreConfigFile::store(self, self.path())
     }
-    /// Store config file to path, if path exists, return error
+
+    /// Returns a [`StoreBuilder`] bound to this struct's
+    /// [`path`][Storable::path], for full control over
+    /// [`pretty`][StoreBuilder::pretty], [`overwrite`][StoreBuilder::overwrite]
+    /// and [`format`][StoreBuilder::format]. Finish with
+    /// [`StoreBuilder::execute`].
     ///
-    /// Parent directories are created automatically if they don't exist.
+    /// # Examples
     ///
-    /// # Errors
+    /// ```no_run
+    /// use config_file2::Storable;
+    /// use serde::Serialize;
+    /// use std::path::{Path, PathBuf};
     ///
-    /// - Returns [`Error::FileExists`] if the file already exists.
-    /// - Returns [`Error::UnsupportedFormat`] if the file extension is not
-    ///   supported.
-    /// - Returns `Error::<Format>` if serialization to file fails.
-    fn store_without_overwrite(&self) -> Result<()> {
-        StoreConfigFile::store_without_overwrite(self, self.path())
+    /// #[derive(Serialize)]
+    /// struct Config;
+    ///
+    /// impl Storable for Config {
+    ///     fn path(&self) -> impl AsRef<Path> {
+    ///         PathBuf::from("/tmp/config.json")
+    ///     }
+    /// }
+    ///
+    /// Config.save_opts().pretty(false).execute().unwrap();
+    /// ```
+    fn save_opts(&self) -> StoreBuilder<'_, Self> {
+        StoreBuilder::new(self, self.path())
     }
 }
 
@@ -355,14 +371,17 @@ fn open_create_new_file(path: &Path) -> Result<File> {
 
 /// Serialize `value` to `path` in the given `config_type`.
 ///
-/// When `overwrite` is `true`, an existing file is truncated; when `false`, the
-/// file is created atomically via [`open_create_new_file`] and
-/// [`Error::FileExists`] is returned if it already exists.
+/// `pretty` selects pretty-printing where the format supports it
+/// (json/toml/ron); other formats ignore it. When `overwrite` is `true`, an
+/// existing file is truncated; when `false`, the file is created atomically via
+/// [`open_create_new_file`] and [`Error::FileExists`] is returned if it already
+/// exists.
 #[allow(unused)]
 fn store_impl<S: Serialize>(
     value: &S,
     path: &Path,
     config_type: ConfigFormat,
+    pretty: bool,
     overwrite: bool,
 ) -> Result<()> {
     let open: fn(&Path) -> Result<File> = if overwrite {
@@ -372,7 +391,15 @@ fn store_impl<S: Serialize>(
     };
     match config_type {
         #[cfg(feature = "json")]
-        ConfigFormat::Json => serde_json::to_writer_pretty(open(path)?, value).map_err(Error::Json),
+        ConfigFormat::Json => {
+            let file = open(path)?;
+            if pretty {
+                serde_json::to_writer_pretty(file, value)
+            } else {
+                serde_json::to_writer(file, value)
+            }
+            .map_err(Error::Json)
+        }
         #[cfg(feature = "json5")]
         ConfigFormat::Json5 => {
             open(path)?.write_all(
@@ -384,8 +411,13 @@ fn store_impl<S: Serialize>(
         }
         #[cfg(feature = "toml")]
         ConfigFormat::Toml => {
-            open(path)?.write_all(
+            let serialized = if pretty {
                 toml::to_string_pretty(value)
+            } else {
+                toml::to_string(value)
+            };
+            open(path)?.write_all(
+                serialized
                     .map_err(TomlError::SerializationError)?
                     .as_bytes(),
             )?;
@@ -404,14 +436,102 @@ fn store_impl<S: Serialize>(
         ConfigFormat::Yaml => yaml_serde::to_writer(open(path)?, value).map_err(Error::Yaml),
         #[cfg(feature = "ron")]
         ConfigFormat::Ron => {
-            open(path)?.write_all(
-                ron_crate::ser::to_string_pretty(value, ron_crate::ser::PrettyConfig::default())?
-                    .as_bytes(),
-            )?;
+            let serialized = if pretty {
+                ron_crate::ser::to_string_pretty(value, ron_crate::ser::PrettyConfig::default())
+            } else {
+                ron_crate::ser::to_string(value)
+            }?;
+            open(path)?.write_all(serialized.as_bytes())?;
             Ok(())
         }
         #[allow(unreachable_patterns)]
         _ => Err(Error::UnsupportedFormat),
+    }
+}
+
+/// Builder for storing a value with fine-grained options.
+///
+/// Created via [`StoreConfigFile::store_opts`]. Configure with
+/// [`pretty`][StoreBuilder::pretty], [`overwrite`][StoreBuilder::overwrite] and
+/// [`format`][StoreBuilder::format], then call
+/// [`execute`][StoreBuilder::execute] to write the file.
+///
+/// Defaults: pretty on, overwrite on, format auto-detected from the path
+/// extension (i.e. the same behavior as [`StoreConfigFile::store`]).
+#[must_use]
+pub struct StoreBuilder<'a, T: Sized + Serialize> {
+    value: &'a T,
+    path: PathBuf,
+    pretty: bool,
+    overwrite: bool,
+    config_format: Option<ConfigFormat>,
+}
+
+impl<T: Sized + Serialize> fmt::Debug for StoreBuilder<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoreBuilder")
+            .field("path", &self.path)
+            .field("pretty", &self.pretty)
+            .field("overwrite", &self.overwrite)
+            .field("config_format", &self.config_format)
+            .finish()
+    }
+}
+
+impl<'a, T: Sized + Serialize> StoreBuilder<'a, T> {
+    fn new(value: &'a T, path: impl AsRef<Path>) -> Self {
+        Self {
+            value,
+            path: path.as_ref().to_path_buf(),
+            pretty: true,
+            overwrite: true,
+            config_format: None,
+        }
+    }
+
+    /// Toggle pretty-printing. Default: `true`. Formats without a pretty
+    /// variant (xml/yaml/json5) ignore this.
+    pub const fn pretty(mut self, pretty: bool) -> Self {
+        self.pretty = pretty;
+        self
+    }
+
+    /// Toggle overwriting an existing file. Default: `true`. When `false`,
+    /// [`execute`][StoreBuilder::execute] returns [`Error::FileExists`] if the
+    /// file already exists.
+    pub const fn overwrite(mut self, overwrite: bool) -> Self {
+        self.overwrite = overwrite;
+        self
+    }
+
+    /// Use a specific [`ConfigFormat`], overriding extension-based detection.
+    pub const fn format(mut self, config_format: ConfigFormat) -> Self {
+        self.config_format = Some(config_format);
+        self
+    }
+
+    /// Store the value with the configured options.
+    ///
+    /// # Errors
+    ///
+    /// - Returns [`Error::UnsupportedFormat`] if the format can't be
+    ///   determined.
+    /// - Returns [`Error::FileAccess`] if the file can't be written.
+    /// - Returns [`Error::FileExists`] if `overwrite` is `false` and the file
+    ///   exists.
+    /// - Returns `Error::<Format>` on serialization failure.
+    pub fn execute(&self) -> Result<()> {
+        let config_type = self
+            .config_format
+            .or_else(|| ConfigFormat::from_path(&self.path))
+            .ok_or(Error::UnsupportedFormat)?;
+        store_impl(
+            self.value,
+            &self.path,
+            config_type,
+            self.pretty,
+            self.overwrite,
+        )
     }
 }
 
@@ -521,19 +641,6 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "toml")]
-    fn test_store_without_overwrite() {
-        let tempdir = TempDir::new().unwrap();
-        let temp = tempdir.path().join("test_store_without_overwrite.toml");
-        std::fs::File::create(&temp).unwrap();
-        assert!(
-            TestConfig::example()
-                .store_without_overwrite(&temp)
-                .is_err()
-        );
-    }
-
-    #[test]
     #[cfg(all(feature = "toml", feature = "yaml"))]
     fn test_store_load_with_specific_format() {
         let tempdir = TempDir::new().unwrap();
@@ -556,6 +663,82 @@ mod test {
         assert_eq!(
             TestConfig::load_or_default(&temp).expect("load_or_default failed"),
             TestConfig::default()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "toml")]
+    fn test_store_builder_round_trip() {
+        let tempdir = TempDir::new().unwrap();
+        for pretty in [true, false] {
+            let temp = tempdir
+                .path()
+                .join(format!("test_store_builder_{pretty}.toml"));
+            TestConfig::example()
+                .store_opts(&temp)
+                .pretty(pretty)
+                .execute()
+                .unwrap();
+            assert_eq!(
+                TestConfig::example(),
+                TestConfig::load(&temp).unwrap().unwrap()
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "toml")]
+    fn test_store_builder_pretty_compact_differ() {
+        let tempdir = TempDir::new().unwrap();
+        let pretty = tempdir.path().join("pretty.toml");
+        let compact = tempdir.path().join("compact.toml");
+        TestConfig::example()
+            .store_opts(&pretty)
+            .pretty(true)
+            .execute()
+            .unwrap();
+        TestConfig::example()
+            .store_opts(&compact)
+            .pretty(false)
+            .execute()
+            .unwrap();
+        // pretty TOML is multi-line and therefore larger than compact TOML.
+        assert!(
+            std::fs::metadata(&pretty).unwrap().len() > std::fs::metadata(&compact).unwrap().len()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "toml")]
+    fn test_store_builder_overwrite_false() {
+        let tempdir = TempDir::new().unwrap();
+        let temp = tempdir.path().join("test_store_builder_overwrite.toml");
+        std::fs::File::create(&temp).unwrap();
+        assert!(
+            TestConfig::example()
+                .store_opts(&temp)
+                .overwrite(false)
+                .execute()
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "toml")]
+    fn test_store_builder_format_override() {
+        let tempdir = TempDir::new().unwrap();
+        // an extension we don't recognize, but force toml via the builder.
+        let temp = tempdir.path().join("test_store_builder_override.dat");
+        TestConfig::example()
+            .store_opts(&temp)
+            .format(ConfigFormat::Toml)
+            .execute()
+            .unwrap();
+        assert!(TestConfig::load(&temp).is_err());
+        assert!(
+            TestConfig::load_with_specific_format(&temp, ConfigFormat::Toml)
+                .unwrap()
+                .is_some()
         );
     }
 }
@@ -581,10 +764,36 @@ mod storable {
     }
 
     #[test]
-    fn test_store() {
+    fn test_save() {
         let tempdir = TempDir::new().unwrap();
-        let temp = tempdir.path().join("test_store.toml");
-        TestStorable { path: temp.clone() }.store().unwrap();
+        let temp = tempdir.path().join("test_save.toml");
+        TestStorable { path: temp.clone() }.save().unwrap();
+        assert!(temp.is_file());
+    }
+
+    #[test]
+    fn test_save_opts() {
+        let tempdir = TempDir::new().unwrap();
+        let temp = tempdir.path().join("test_save_opts.toml");
+        TestStorable { path: temp.clone() }
+            .save_opts()
+            .pretty(false)
+            .execute()
+            .unwrap();
+        assert!(temp.is_file());
+    }
+
+    #[test]
+    fn test_both_traits_no_ambiguity() {
+        // Regression: importing both StoreConfigFile and Storable must not make
+        // `.store(path)` / `.save()` ambiguous.
+        use super::StoreConfigFile;
+
+        let tempdir = TempDir::new().unwrap();
+        let temp = tempdir.path().join("test_no_ambiguity.toml");
+        let config = TestStorable { path: temp.clone() };
+        config.store(&temp).unwrap(); // StoreConfigFile
+        config.save().unwrap(); // Storable
         assert!(temp.is_file());
     }
 }
