@@ -16,6 +16,9 @@ Extremely easy to load and store your configuration file!
    - `xml`
    - `yaml`
    - [`ron`](https://github.com/ron-rs/ron)
+   - `atomic` — crash-safe atomic writes via [`tempfile`](https://docs.rs/tempfile) (enabled by default)
+
+When `atomic` is enabled, stores write to a temporary file in the target's directory and rename it into place.
 
 Here's an example of how to use it with json and yaml format:
 

@@ -8,12 +8,11 @@ pub mod error;
 // `Write` is only needed by the `write_all` based serializers.
 #[cfg(any(feature = "json", feature = "xml", feature = "yaml", feature = "ron"))]
 use std::io::BufReader;
-#[cfg(any(feature = "json5", feature = "toml", feature = "xml", feature = "ron"))]
-use std::io::Write;
 use std::{
     ffi::OsStr,
     fmt::{self, Debug},
     fs::{File, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -373,9 +372,13 @@ fn open_create_new_file(path: &Path) -> Result<File> {
 ///
 /// `pretty` selects pretty-printing where the format supports it
 /// (json/toml/ron); other formats ignore it. When `overwrite` is `true`, an
-/// existing file is truncated; when `false`, the file is created atomically via
-/// [`open_create_new_file`] and [`Error::FileExists`] is returned if it already
-/// exists.
+/// existing file is replaced; when `false`, [`Error::FileExists`] is returned
+/// if it already exists.
+///
+/// With the `atomic` feature enabled the payload is written to a temporary file
+/// in the target's directory and renamed into place only once serialization
+/// succeeds, so a crash or serialization error never truncates or corrupts an
+/// existing config file. Without it the target is written in place.
 #[allow(unused)]
 fn store_impl<S: Serialize>(
     value: &S,
@@ -384,68 +387,166 @@ fn store_impl<S: Serialize>(
     pretty: bool,
     overwrite: bool,
 ) -> Result<()> {
-    let open: fn(&Path) -> Result<File> = if overwrite {
-        open_write_file
-    } else {
-        open_create_new_file
-    };
     match config_type {
         #[cfg(feature = "json")]
         ConfigFormat::Json => {
-            let file = open(path)?;
+            let mut sink = open_sink(path, overwrite)?;
             if pretty {
-                serde_json::to_writer_pretty(file, value)
+                serde_json::to_writer_pretty(&mut sink, value)
             } else {
-                serde_json::to_writer(file, value)
+                serde_json::to_writer(&mut sink, value)
             }
-            .map_err(Error::Json)
+            .map_err(Error::Json)?;
+            sink.finalize(path, overwrite)
         }
         #[cfg(feature = "json5")]
         ConfigFormat::Json5 => {
-            open(path)?.write_all(
+            let mut sink = open_sink(path, overwrite)?;
+            sink.write_all(
                 json_five::to_string(value)
                     .map_err(Json5Error::SerializationError)?
                     .as_bytes(),
             )?;
-            Ok(())
+            sink.finalize(path, overwrite)
         }
         #[cfg(feature = "toml")]
         ConfigFormat::Toml => {
+            let mut sink = open_sink(path, overwrite)?;
             let serialized = if pretty {
                 toml::to_string_pretty(value)
             } else {
                 toml::to_string(value)
             };
-            open(path)?.write_all(
+            sink.write_all(
                 serialized
                     .map_err(TomlError::SerializationError)?
                     .as_bytes(),
             )?;
-            Ok(())
+            sink.finalize(path, overwrite)
         }
         #[cfg(feature = "xml")]
         ConfigFormat::Xml => {
-            open(path)?.write_all(
+            let mut sink = open_sink(path, overwrite)?;
+            sink.write_all(
                 quick_xml::se::to_string(value)
                     .map_err(XmlError::SerializationError)?
                     .as_bytes(),
             )?;
-            Ok(())
+            sink.finalize(path, overwrite)
         }
         #[cfg(feature = "yaml")]
-        ConfigFormat::Yaml => yaml_serde::to_writer(open(path)?, value).map_err(Error::Yaml),
+        ConfigFormat::Yaml => {
+            let mut sink = open_sink(path, overwrite)?;
+            yaml_serde::to_writer(&mut sink, value).map_err(Error::Yaml)?;
+            sink.finalize(path, overwrite)
+        }
         #[cfg(feature = "ron")]
         ConfigFormat::Ron => {
+            let mut sink = open_sink(path, overwrite)?;
             let serialized = if pretty {
                 ron_crate::ser::to_string_pretty(value, ron_crate::ser::PrettyConfig::default())
             } else {
                 ron_crate::ser::to_string(value)
             }?;
-            open(path)?.write_all(serialized.as_bytes())?;
-            Ok(())
+            sink.write_all(serialized.as_bytes())?;
+            sink.finalize(path, overwrite)
         }
         #[allow(unreachable_patterns)]
         _ => Err(Error::UnsupportedFormat),
+    }
+}
+
+/// Write target that transparently supports optional atomic writes.
+///
+/// Without the `atomic` feature a [`Sink`] is always [`Sink::Plain`]: a normal
+/// [`File`] opened with truncate (overwrite) or create-new semantics. With the
+/// feature enabled it is instead [`Sink::Temp`], a [`tempfile::NamedTempFile`]
+/// created in the target file's directory and renamed into place by
+/// [`Sink::finalize`], so readers never observe a partially-written file.
+#[allow(unused)]
+enum Sink {
+    Plain(File),
+    #[cfg(feature = "atomic")]
+    Temp(tempfile::NamedTempFile),
+}
+
+impl Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Self::Plain(file) => file.write(buf),
+            #[cfg(feature = "atomic")]
+            Self::Temp(tmp) => tmp.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Self::Plain(file) => file.flush(),
+            #[cfg(feature = "atomic")]
+            Self::Temp(tmp) => tmp.flush(),
+        }
+    }
+}
+
+impl Sink {
+    /// Commit a finished write.
+    ///
+    /// For a plain file this is a no-op (the file is closed on drop). For an
+    /// atomic sink it renames the temporary file into `path`: atomically
+    /// replacing any existing file when `overwrite` is `true`, or failing with
+    /// [`Error::FileExists`] when `false`. If this returns an error the
+    /// temporary file is removed, leaving the original target untouched.
+    #[allow(unused)]
+    fn finalize(self, path: &Path, overwrite: bool) -> Result<()> {
+        match self {
+            Self::Plain(_) => Ok(()),
+            #[cfg(feature = "atomic")]
+            Self::Temp(tmp) => {
+                let result = if overwrite {
+                    tmp.persist(path)
+                } else {
+                    tmp.persist_noclobber(path)
+                };
+                result
+                    .map_err(|tempfile::PersistError { error, .. }| {
+                        if !overwrite && error.kind() == std::io::ErrorKind::AlreadyExists {
+                            Error::FileExists
+                        } else {
+                            Error::FileAccess(error)
+                        }
+                    })
+                    .map(|_| ())
+            }
+        }
+    }
+}
+
+/// Open a [`Sink`] for writing `path`.
+///
+/// When the `atomic` feature is enabled the sink is a temporary file created in
+/// the same directory as `path` (so the final rename stays on one filesystem),
+/// and parent directories are created up front. Otherwise a plain file is
+/// opened directly with truncate or create-new semantics depending on
+/// `overwrite`.
+#[allow(unused)]
+fn open_sink(path: &Path, overwrite: bool) -> Result<Sink> {
+    #[cfg(feature = "atomic")]
+    {
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+        if let Some(p) = parent {
+            std::fs::create_dir_all(p)?;
+        }
+        let dir = parent.unwrap_or_else(|| Path::new("."));
+        Ok(Sink::Temp(tempfile::NamedTempFile::new_in(dir)?))
+    }
+    #[cfg(not(feature = "atomic"))]
+    {
+        let file = if overwrite {
+            open_write_file(path)?
+        } else {
+            open_create_new_file(path)?
+        };
+        Ok(Sink::Plain(file))
     }
 }
 
@@ -740,6 +841,60 @@ mod test {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    /// A type that always fails to serialize, used to verify that a failed
+    /// atomic write never touches the existing target file.
+    struct AlwaysFail;
+    impl serde::Serialize for AlwaysFail {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            _serializer: S,
+        ) -> std::result::Result<S::Ok, S::Error> {
+            use serde::ser::Error as _;
+            Err(S::Error::custom("intentional serialization failure"))
+        }
+    }
+
+    // Without the `atomic` feature, a serialization failure mid-write leaves the
+    // target file truncated/corrupt because it is opened (and truncated) before
+    // serialization. With `atomic`, the write goes to a temp file that is only
+    // renamed into place on success, so the original is guaranteed intact.
+    #[test]
+    #[cfg(all(feature = "atomic", feature = "toml"))]
+    fn test_atomic_preserves_original_on_serialize_failure() {
+        let tempdir = TempDir::new().unwrap();
+        let temp = tempdir.path().join("atomic_preserve_on_fail.toml");
+        TestConfig::example().store(&temp).unwrap();
+        let before = std::fs::read(&temp).unwrap();
+
+        let res = AlwaysFail.store_opts(&temp).overwrite(true).execute();
+        assert!(res.is_err(), "expected serialization to fail");
+
+        assert_eq!(std::fs::read(&temp).unwrap(), before);
+        // no leftover temp files in the directory
+        assert_eq!(
+            std::fs::read_dir(tempdir.path()).unwrap().count(),
+            1,
+            "temp file should be cleaned up"
+        );
+    }
+
+    #[test]
+    #[cfg(all(feature = "atomic", feature = "toml"))]
+    fn test_atomic_overwrite_false_preserves_original() {
+        let tempdir = TempDir::new().unwrap();
+        let temp = tempdir.path().join("atomic_overwrite_false.toml");
+        TestConfig::example().store(&temp).unwrap();
+        let before = std::fs::read(&temp).unwrap();
+
+        let res = TestConfig::default()
+            .store_opts(&temp)
+            .overwrite(false)
+            .execute();
+        assert!(res.is_err(), "expected FileExists error");
+
+        assert_eq!(std::fs::read(&temp).unwrap(), before);
     }
 }
 
