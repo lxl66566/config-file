@@ -24,7 +24,7 @@ Here's an example of how to use it with json and yaml format:
 
 ```toml
 [dependencies]
-config-file2 = { version = "0.4", features = ["json", "yaml"] }
+config-file2 = { version = "0.7", features = ["json", "yaml"] }
 ```
 
 ## Examples
@@ -101,7 +101,7 @@ config.save_opts().pretty(false).execute().unwrap();
 ## more
 
 ```rust, ignore
-fn load_with_specific_format(path: impl AsRef<Path>, config_type: ConfigFormat) -> Result<Self>;
+fn load_with_specific_format(path: impl AsRef<Path>, config_type: ConfigFormat) -> Result<Option<Self>>;
 fn load_or_default(path: impl AsRef<Path>) -> Result<Self>;
 fn store(&self, path: impl AsRef<Path>) -> Result<()>;
 fn store_with_specific_format(&self, path: impl AsRef<Path>, config_type: ConfigFormat) -> Result<()>;
